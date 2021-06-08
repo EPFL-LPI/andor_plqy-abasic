@@ -1,0 +1,300 @@
+/*****************/
+/****  setup  ****/
+/*****************/
+
+
+prefilter$ = "OD1"
+
+// filters: { 
+//    1: 405 BPF, 
+//    2: 450 LPF, 
+//    3: 700 LPF, 
+//    4: 650 BPF, 
+//    5: 420 BPF, 
+//    6: OD2 NDF 
+// }
+
+fi405bpf = 1
+fi450lpf = 2
+fi700lpf = 3
+fi650bpf = 4
+fi420bpf = 5
+fiOD2ndf = 6
+
+
+.filterName
+  filterIndex = GetFilter()
+  
+  select case filterIndex
+  case 1
+    filter_name$ = "405BPF"
+    break
+
+  case 2
+    filter_name$ = "450LPF"
+    break
+
+  case 3
+    filter_name$ = "700LPF"
+    break
+
+  case 4
+    filter_name$ = "650BPF"
+    break
+
+  case 5
+    filter_name$ = "420BPF"
+    break
+
+  case 6
+    filter_name$ = "OD2NDF"
+    break
+
+  case else
+    print( "An invalid filter was found. Index: "; filterIndex )
+    end
+    break
+
+  selend
+
+return
+
+// auto parameters
+
+exposure_time$ = str$( GetExposureTime() )
+wavelength$ = str$( GetWavelength() )
+grating_lines$ = str$( GetGratingLines( GetGrating() ) )
+
+
+/****************/
+/****  main  ****/
+/****************/
+
+gosub .setup
+
+// --- no sample
+
+input( "Perform No Sample measurement? 'n' for no, any other key for yes.", no_sample$ )
+if ( strcomp( "n", no_sample$, 1 ) != 0 ) then
+  key( "Integrating sphere: No sample.\\Empty integrating sphere and block fs beam.\\Press Enter to continue." )
+  sample_name$ = "no sample"
+  measurement$ = "ip_laser"
+
+  gosub .sampleFilter
+  gosub .background
+  gosub .signal
+  gosub .save
+
+  gosub .laserFilter
+  gosub .background
+  gosub .signal
+  gosub .save
+
+  key( "No Sample measurement complete.\\Begin sample measurements.\\Press Enter to continue." )
+endif
+
+// --- samples 
+
+while ( 1 )
+  // --- main experiment loop ---
+  
+  input( "Sample name", sample_name$ )
+
+  // === free space ===
+
+  key( "Free Space Measurement.\\Place the sample in the Free Space holder.\\Press Enter to continue." )
+
+  measurement$ = "fs"
+
+  gosub .sampleFilter
+  gosub .background
+
+  gosub .signal
+  gosub .save
+
+  // === in beam ===
+
+  key( "Integrating Sphere: In Beam.\\Place the sample in the Integrating Sphere In Beam position.\\Press Enter to continue." )
+
+  measurement$ = "ip_inbeam"
+
+  // --- set filter sample
+  gosub .sampleFilter
+  gosub .background
+
+  gosub .signal
+  gosub .save
+
+  // --- set filter laser
+  gosub .laserFilter
+  gosub .background
+
+  gosub .signal
+  gosub .save
+
+
+  // === out of beam ===
+
+
+  key( "Integrating Sphere: Out of Beam.\\Place the sample in the Integrating Sphere Out of Beam position.\\Press Enter to perform measurement." )
+
+  measurement$ = "ip_outofbeam"
+
+  // --- set filter laser
+  // don't retake background, still valid
+  gosub .laserFilter
+  gosub .signal
+  gosub .save
+
+  // --- set filter sample
+
+  gosub .sampleFilter
+  gosub .background
+
+  gosub .signal 
+  gosub .save
+
+  key( "Measurement complete.\\Press ESC to quit, or any other key to run another sample." )
+
+wend
+
+
+/***********************/
+/****  subroutines  ****/
+/***********************/
+
+
+// --- setup ---
+
+.setup
+  key( "PLQY Experiment\\Experiment parameters" )
+  input( "Automate background shutter? 'n' for no, any other key for yes.", background_shutter$ )
+  input( "Number of accumulations", acc$ )
+  input( "Laser wavelength (nm)", laser_wavelength$ )
+  input( "Laser power (mW)", laser_power$ )
+
+  gosub .setupId
+  gosub .backgroundShutter
+
+  key( "To quit press ESC at any time." )
+
+return
+
+
+.backgroundShutter
+  // strcomp can not handle mepty strings
+  if ( len( background_shutter$ ) == 0 ) then
+    // empty input, default to true
+    bgShutter = 1
+
+  else
+    // strcomp returns 0 if strings are equal
+    // first parameter can not be empty
+    if ( strcomp( "n", background_shutter$, 1 ) == 0 ) then
+      bgShutter = 0
+    
+    else
+      bgShutter = 1
+    
+    endif
+  endif
+
+  if ( bgShutter ) then
+    // place shutter into auto mode
+    SetShutter( 2, 1 )
+  endif
+  
+return
+
+// --- measuring ---
+
+.background
+  if ( bgShutter == 0 ) then
+    key( "Background measurement.\\Press Enter to perform measurement." )
+
+  endif
+  
+  SetAcquisitionType( 1 )
+  run()
+return
+
+ 
+.signal   
+   if ( bgShutter == 0 ) then
+     key( "Signal measurement.\\Press Enter to perform measurement." )
+   
+   endif
+   
+   SetAcquisitionType( 0 )
+   run()
+return
+
+
+.measure
+  gosub .background
+  gosub .signal
+return
+
+
+// --- filters ---
+
+.sampleFilter
+  if ( val( laser_wavelength$ ) >= 450 ) then
+    // laser longer than 450 nm, use 700 LPF
+    SetFilter( fi700lpf ) 
+
+  else
+    // laser shorter than 450 nm, use 450 LPF
+    SetFilter( fi450lpf ) 
+
+  endif
+return
+
+
+.laserFilter
+  if ( val( laser_wavelength$ ) >= 450 ) then
+    // laser longer than 450 nm, use 650 BPF
+    SetFilter( fi650bpf ) 
+
+  else
+    // laser shorter than 450 nm, use 420 BPF
+    SetFilter( fi420bpf ) 
+
+  endif
+return
+
+// --- saving ---
+
+.save
+  gosub .fileId
+  save( #0, file_id$ + ".sif" )
+  SaveAsciiXY( #0, file_id$ + ".csv" )
+return
+
+
+.fileId
+  gosub .setupId
+
+  file_id$ = sample_name$ + "--" + measurement$ + "--" + setup_id$
+return
+
+
+.setupId
+  gosub .laserId
+  gosub .andorId
+  
+  setup_id$ = laser_id$ + "--" + andor_id$
+return
+
+
+.laserId
+  laser_id$ = "laser_" + laser_wavelength$ + "nm_" + laser_power$ + "mW_" + prefilter$
+return
+
+
+.andorId
+//  gosub .exposureTime
+  gosub .filterName
+
+  andor_id$ = "Andor_" + exposure_time$ + "s_" + acc$ + "acc_" + grating_lines$ + "lmm_" + "center" + wavelength$ + "nm_" + filter_name$
+return
